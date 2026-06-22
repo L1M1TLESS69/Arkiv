@@ -1,0 +1,6 @@
+{
+  "name": "Arkiv",
+  "description": "Secure, local-first personal document organizer with customizable categories, tags, search, app lock, and secure offline storage.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Centered visual secure vault shield -->
+    <path
+        android:fillColor="#D0BCFF"
+        android:pathData="M54,22 L26,32 L26,58 C26,76.5 37.8,93.5 54,99 C70.2,93.5 82,76.5 82,58 L82,32 Z" />
+    <!-- Inner lock mechanism keylock in deep purple contrast -->
+    <path
+        android:fillColor="#381E72"
+        android:pathData="M54,42 C50.1,42 47,45.1 47,49 C47,51.8 48.7,54.3 51,55.4 L49,70 L59,70 L57,55.4 C59.3,54.3 61,51.8 61,49 C61,45.1 57.9,42 54,42 Z" />
+</vector>
