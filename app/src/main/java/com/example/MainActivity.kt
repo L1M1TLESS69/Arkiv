@@ -9,6 +9,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -62,11 +63,10 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    Crossfade(targetState = viewModel.isAppLocked, label = "AppLockCrossfade") { locked ->
-                        if (locked) {
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        AppNavigator(viewModel = viewModel)
+                        if (viewModel.isAppLocked) {
                             PinLockScreen(viewModel = viewModel)
-                        } else {
-                            AppNavigator(viewModel = viewModel)
                         }
                     }
                 }

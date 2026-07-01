@@ -9,42 +9,90 @@ import android.provider.MediaStore
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 import java.io.InputStream
 
+enum class StorageSaveStatus {
+    IDLE, SAVING, SAVED, ERROR
+}
+
 class DocumentRepository(
     private val context: Context,
     private val documentDao: DocumentDao
 ) {
+    private val _saveStatus = MutableStateFlow(StorageSaveStatus.IDLE)
+    val saveStatus: StateFlow<StorageSaveStatus> = _saveStatus.asStateFlow()
+
     val allActiveDocuments: Flow<List<DocumentEntity>> = documentDao.getAllActiveDocuments()
     val allCategories: Flow<List<CategoryEntity>> = documentDao.getAllCategories()
     val trashedDocuments: Flow<List<DocumentEntity>> = documentDao.getTrashedDocuments()
 
     fun getDocumentById(id: Long): Flow<DocumentEntity?> = documentDao.getDocumentById(id)
 
+    suspend fun getDocumentByIdSync(id: Long): DocumentEntity? = withContext(Dispatchers.IO) {
+        documentDao.getDocumentByIdSync(id)
+    }
+
     fun getCategoriesByParentId(parentId: Long): Flow<List<CategoryEntity>> =
         documentDao.getCategoriesByParentId(parentId)
 
     suspend fun insertDocument(document: DocumentEntity): Long = withContext(Dispatchers.IO) {
-        documentDao.insertDocument(document)
+        _saveStatus.value = StorageSaveStatus.SAVING
+        try {
+            // Encrypt file on disk if it exists in secure_vault folder and is not already encrypted
+            val file = File(document.localUri)
+            if (file.exists() && file.absolutePath.contains("secure_vault")) {
+                try {
+                    val rawBytes = file.readBytes()
+                    val encryptedBytes = com.example.utils.AESCryptUtils.encryptBytes(rawBytes)
+                    file.writeBytes(encryptedBytes)
+                } catch (encryptEx: Exception) {
+                    Log.e("Repository", "Failed transparently encrypting document: ${encryptEx.message}")
+                }
+            }
+
+            val res = documentDao.insertDocument(document.copy(fileSize = file.length()))
+            _saveStatus.value = StorageSaveStatus.SAVED
+            res
+        } catch (e: Exception) {
+            _saveStatus.value = StorageSaveStatus.ERROR
+            throw e
+        }
     }
 
     suspend fun updateDocument(document: DocumentEntity) = withContext(Dispatchers.IO) {
-        documentDao.updateDocument(document)
+        _saveStatus.value = StorageSaveStatus.SAVING
+        try {
+            documentDao.updateDocument(document)
+            _saveStatus.value = StorageSaveStatus.SAVED
+        } catch (e: Exception) {
+            _saveStatus.value = StorageSaveStatus.ERROR
+            throw e
+        }
     }
 
     suspend fun deleteDocument(document: DocumentEntity) = withContext(Dispatchers.IO) {
-        // delete local file
+        _saveStatus.value = StorageSaveStatus.SAVING
         try {
-            val file = File(document.localUri)
-            if (file.exists()) file.delete()
+            // delete local file
+            try {
+                val file = File(document.localUri)
+                if (file.exists()) file.delete()
+            } catch (e: Exception) {
+                Log.e("Repository", "Error deleting local file: ${e.message}")
+            }
+            documentDao.deleteDocument(document)
+            _saveStatus.value = StorageSaveStatus.SAVED
         } catch (e: Exception) {
-            Log.e("Repository", "Error deleting local file: ${e.message}")
+            _saveStatus.value = StorageSaveStatus.ERROR
+            throw e
         }
-        documentDao.deleteDocument(document)
     }
 
     suspend fun deleteDocumentById(id: Long) = withContext(Dispatchers.IO) {
@@ -55,11 +103,26 @@ class DocumentRepository(
     }
 
     suspend fun insertCategory(category: CategoryEntity): Long = withContext(Dispatchers.IO) {
-        documentDao.insertCategory(category)
+        _saveStatus.value = StorageSaveStatus.SAVING
+        try {
+            val res = documentDao.insertCategory(category)
+            _saveStatus.value = StorageSaveStatus.SAVED
+            res
+        } catch (e: Exception) {
+            _saveStatus.value = StorageSaveStatus.ERROR
+            throw e
+        }
     }
 
     suspend fun deleteCategoryById(id: Long) = withContext(Dispatchers.IO) {
-        documentDao.deleteCategoryById(id)
+        _saveStatus.value = StorageSaveStatus.SAVING
+        try {
+            documentDao.deleteCategoryById(id)
+            _saveStatus.value = StorageSaveStatus.SAVED
+        } catch (e: Exception) {
+            _saveStatus.value = StorageSaveStatus.ERROR
+            throw e
+        }
     }
 
     /**
@@ -74,28 +137,42 @@ class DocumentRepository(
      * Copies a file from external Uri (e.g. Photo Picker/Storage) to app's secure internal storage.
      */
     suspend fun copyFileToSecureInternal(uri: Uri, destFileName: String): String = withContext(Dispatchers.IO) {
-        val secureFolder = File(context.filesDir, "secure_vault")
-        if (!secureFolder.exists()) secureFolder.mkdirs()
+        _saveStatus.value = StorageSaveStatus.SAVING
+        try {
+            val secureFolder = File(context.filesDir, "secure_vault")
+            if (!secureFolder.exists()) secureFolder.mkdirs()
 
-        val destFile = File(secureFolder, "${System.currentTimeMillis()}_$destFileName")
-        context.contentResolver.openInputStream(uri)?.use { input ->
-            FileOutputStream(destFile).use { output ->
-                input.copyTo(output)
+            val destFile = File(secureFolder, "${System.currentTimeMillis()}_$destFileName")
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                FileOutputStream(destFile).use { output ->
+                    input.copyTo(output)
+                }
             }
+            _saveStatus.value = StorageSaveStatus.SAVED
+            destFile.absolutePath
+        } catch (e: Exception) {
+            _saveStatus.value = StorageSaveStatus.ERROR
+            throw e
         }
-        destFile.absolutePath
     }
 
     /**
      * Writes direct string text to a secure internal file (for text document / scans)
      */
     suspend fun writeStringToSecureInternal(content: String, destFileName: String): String = withContext(Dispatchers.IO) {
-        val secureFolder = File(context.filesDir, "secure_vault")
-        if (!secureFolder.exists()) secureFolder.mkdirs()
+        _saveStatus.value = StorageSaveStatus.SAVING
+        try {
+            val secureFolder = File(context.filesDir, "secure_vault")
+            if (!secureFolder.exists()) secureFolder.mkdirs()
 
-        val destFile = File(secureFolder, "${System.currentTimeMillis()}_$destFileName")
-        destFile.writeText(content)
-        destFile.absolutePath
+            val destFile = File(secureFolder, "${System.currentTimeMillis()}_$destFileName")
+            destFile.writeText(content)
+            _saveStatus.value = StorageSaveStatus.SAVED
+            destFile.absolutePath
+        } catch (e: Exception) {
+            _saveStatus.value = StorageSaveStatus.ERROR
+            throw e
+        }
     }
 
     /**
@@ -111,6 +188,9 @@ class DocumentRepository(
                 sourceFile.writeText(document.ocrText.ifEmpty { "Arkiv Saved File content for: ${document.name}" })
             }
 
+            val fileBytes = sourceFile.readBytes()
+            val decryptedBytes = com.example.utils.AESCryptUtils.decryptBytes(fileBytes)
+
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 val resolver = context.contentResolver
                 val contentValues = ContentValues().apply {
@@ -122,9 +202,7 @@ class DocumentRepository(
                     ?: return@withContext Result.failure(Exception("Failed to insert MediaStore download entry."))
 
                 resolver.openOutputStream(uri)?.use { output ->
-                    sourceFile.inputStream().use { input ->
-                        input.copyTo(output)
-                    }
+                    output.write(decryptedBytes)
                 }
                 Result.success("Downloaded to public 'Downloads' folder successfully.")
             } else {
@@ -136,11 +214,48 @@ class DocumentRepository(
                     targetFile = File(downloadsFolder, "${System.currentTimeMillis()}_${document.fileName}")
                 }
 
-                sourceFile.copyTo(targetFile, overwrite = true)
+                targetFile.writeBytes(decryptedBytes)
                 Result.success("Downloaded to 'Downloads/${targetFile.name}' successfully.")
             }
         } catch (e: Exception) {
             Log.e("Repository", "Failed export: ${e.message}")
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * SAVE BACKUP BYTES to public system Downloads directory.
+     */
+    suspend fun saveBackupToDownloads(fileName: String, mimeType: String, bytes: ByteArray): Result<String> = withContext(Dispatchers.IO) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val resolver = context.contentResolver
+                val contentValues = ContentValues().apply {
+                    put(MediaStore.Downloads.DISPLAY_NAME, fileName)
+                    put(MediaStore.Downloads.MIME_TYPE, mimeType)
+                    put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                }
+                val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues)
+                    ?: return@withContext Result.failure(Exception("Failed to insert MediaStore download entry."))
+
+                resolver.openOutputStream(uri)?.use { output ->
+                    output.write(bytes)
+                }
+                Result.success("Saved secure backup to 'Downloads/$fileName' folder successfully.")
+            } else {
+                val downloadsFolder = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                if (!downloadsFolder.exists()) downloadsFolder.mkdirs()
+
+                var targetFile = File(downloadsFolder, fileName)
+                if (targetFile.exists()) {
+                    targetFile = File(downloadsFolder, "${System.currentTimeMillis()}_$fileName")
+                }
+
+                targetFile.writeBytes(bytes)
+                Result.success("Saved secure backup to 'Downloads/${targetFile.name}' successfully.")
+            }
+        } catch (e: Exception) {
+            Log.e("Repository", "Failed backup export: ${e.message}")
             Result.failure(e)
         }
     }
